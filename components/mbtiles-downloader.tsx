@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Progress } from "@/components/ui/progress"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Download, MapPin, Settings, Zap, Database, Gauge } from "lucide-react"
+import { Download, MapPin, Settings, Zap, Database, Gauge, CheckCircle, AlertCircle } from "lucide-react"
 
 interface ProgressData {
   total_tiles: number
@@ -41,14 +41,15 @@ export default function MBTilesDownloader() {
 
   const progressInterval = useRef<NodeJS.Timeout | null>(null)
 
-  // Get the base URL for API calls
-  const getApiUrl = (endpoint: string) => {
-    if (typeof window !== "undefined") {
-      // Client-side: use current domain
-      return `/api${endpoint}`
-    }
-    return `/api${endpoint}`
-  }
+  // Quick preset locations
+  const presetLocations = [
+    { name: "New York City", lat: "40.7831", lon: "-74.0059", icon: "🗽" },
+    { name: "London", lat: "51.5074", lon: "-0.1278", icon: "🏰" },
+    { name: "Tokyo", lat: "35.6762", lon: "139.6503", icon: "🗼" },
+    { name: "Delhi", lat: "28.6139", lon: "77.2090", icon: "🕌" },
+    { name: "Sydney", lat: "-33.8688", lon: "151.2093", icon: "🏛️" },
+    { name: "Paris", lat: "48.8566", lon: "2.3522", icon: "🗼" },
+  ]
 
   const updateAreaInfo = () => {
     const buffer = areaSize === "custom" ? Number.parseFloat(customBuffer) : Number.parseFloat(areaSize)
@@ -77,7 +78,7 @@ export default function MBTilesDownloader() {
 
   const pollProgress = async (sessionId: string) => {
     try {
-      const response = await fetch(getApiUrl(`/progress/${sessionId}`))
+      const response = await fetch(`/api/progress/${sessionId}`)
       const progressData = await response.json()
 
       if (response.ok) {
@@ -87,10 +88,10 @@ export default function MBTilesDownloader() {
           clearInterval(progressInterval.current!)
           setIsLoading(false)
 
-          let message = `✅ MBTiles created successfully!<br/>`
-          message += `📁 File: ${progressData.display_name || "output.mbtiles"}<br/>`
-          message += `📏 Size: ${(progressData.file_size_bytes / 1024 / 1024).toFixed(2)} MB<br/>`
-          message += `📊 Total Tiles: ${progressData.total_tiles}<br/>`
+          let message = `✅ MBTiles created successfully!\n`
+          message += `📁 File: ${progressData.display_name || "output.mbtiles"}\n`
+          message += `📏 Size: ${(progressData.file_size_bytes / 1024 / 1024).toFixed(2)} MB\n`
+          message += `📊 Total Tiles: ${progressData.total_tiles}\n`
           message += `⏱️ Total Time: ${formatTime(progressData.elapsed_time)}`
 
           setStatus(message)
@@ -113,14 +114,14 @@ export default function MBTilesDownloader() {
     setStatusType("info")
 
     try {
-      const response = await fetch(getApiUrl("/check_qgis"))
+      const response = await fetch("/api/check_qgis")
       const data = await response.json()
 
       if (response.ok) {
-        let message = `✅ System Status: ${data.qgis_status}<br/><br/>`
-        message += `🛠️ Available Methods:<br/>`
-        message += `• Manual tile download (recommended)<br/>`
-        message += `<br/>📡 Ready to download satellite imagery!`
+        let message = `✅ System Status: ${data.qgis_status}\n\n`
+        message += `🛠️ Available Methods:\n`
+        message += `• Manual tile download (recommended)\n`
+        message += `\n📡 Ready to download satellite imagery!`
 
         setStatus(message)
         setStatusType("success")
@@ -166,7 +167,7 @@ export default function MBTilesDownloader() {
     setProgress(null)
 
     try {
-      const response = await fetch(getApiUrl("/download_mbtiles"), {
+      const response = await fetch("/api/download_mbtiles", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -211,12 +212,17 @@ export default function MBTilesDownloader() {
     if (progress?.output_file) {
       const filename = progress.output_file.split("/").pop() || "output.mbtiles"
       const link = document.createElement("a")
-      link.href = getApiUrl(`/download_file/${filename}`)
+      link.href = `/api/download_file/${filename}`
       link.download = progress.display_name || filename
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
     }
+  }
+
+  const setPresetLocation = (preset: (typeof presetLocations)[0]) => {
+    setLat(preset.lat)
+    setLon(preset.lon)
   }
 
   useEffect(() => {
@@ -231,6 +237,33 @@ export default function MBTilesDownloader() {
 
   return (
     <div className="space-y-6">
+      {/* Quick Preset Locations */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <MapPin className="h-5 w-5" />
+            Quick Location Presets
+          </CardTitle>
+          <CardDescription>Click on a location to quickly set coordinates</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            {presetLocations.map((preset) => (
+              <Button
+                key={preset.name}
+                variant="outline"
+                className="h-auto p-3 flex flex-col items-center gap-2 bg-transparent"
+                onClick={() => setPresetLocation(preset)}
+              >
+                <span className="text-2xl">{preset.icon}</span>
+                <span className="text-xs font-medium">{preset.name}</span>
+              </Button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Location Settings */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -320,6 +353,7 @@ export default function MBTilesDownloader() {
         </CardContent>
       </Card>
 
+      {/* Zoom Level Configuration */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -338,7 +372,7 @@ export default function MBTilesDownloader() {
                 max="18"
                 value={minZoom}
                 onChange={(e) => setMinZoom(Number.parseInt(e.target.value))}
-                className="w-full"
+                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
               />
             </div>
 
@@ -350,7 +384,7 @@ export default function MBTilesDownloader() {
                 max="21"
                 value={maxZoom}
                 onChange={(e) => setMaxZoom(Number.parseInt(e.target.value))}
-                className="w-full"
+                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
               />
             </div>
           </div>
@@ -386,6 +420,7 @@ export default function MBTilesDownloader() {
         </CardContent>
       </Card>
 
+      {/* Action Buttons */}
       <div className="flex gap-4">
         <Button onClick={checkSetup} disabled={isLoading} variant="outline" className="flex-1 bg-transparent">
           <Zap className="mr-2 h-4 w-4" />🔧 Check Setup
@@ -395,6 +430,7 @@ export default function MBTilesDownloader() {
         </Button>
       </div>
 
+      {/* Progress Display */}
       {progress && (
         <Card>
           <CardHeader>
@@ -407,25 +443,25 @@ export default function MBTilesDownloader() {
             <Progress value={progress.progress_percent} className="w-full" />
 
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-              <div className="text-center">
+              <div className="text-center p-3 bg-green-50 rounded-lg">
                 <div className="text-2xl font-bold text-green-600">{progress.progress_percent}%</div>
                 <div className="text-sm text-muted-foreground">Progress</div>
               </div>
-              <div className="text-center">
+              <div className="text-center p-3 bg-blue-50 rounded-lg">
                 <div className="text-2xl font-bold text-blue-600">
                   {progress.downloaded_tiles} / {progress.total_tiles}
                 </div>
                 <div className="text-sm text-muted-foreground">Tiles Downloaded</div>
               </div>
-              <div className="text-center">
+              <div className="text-center p-3 bg-purple-50 rounded-lg">
                 <div className="text-2xl font-bold text-purple-600">{progress.current_zoom}</div>
                 <div className="text-sm text-muted-foreground">Current Zoom</div>
               </div>
-              <div className="text-center">
+              <div className="text-center p-3 bg-orange-50 rounded-lg">
                 <div className="text-2xl font-bold text-orange-600">{progress.tiles_per_second}</div>
                 <div className="text-sm text-muted-foreground">Tiles/sec</div>
               </div>
-              <div className="text-center">
+              <div className="text-center p-3 bg-red-50 rounded-lg">
                 <div className="text-2xl font-bold text-red-600">
                   {progress.estimated_remaining_time > 0
                     ? formatTime(progress.estimated_remaining_time)
@@ -433,14 +469,14 @@ export default function MBTilesDownloader() {
                 </div>
                 <div className="text-sm text-muted-foreground">Time Remaining</div>
               </div>
-              <div className="text-center">
+              <div className="text-center p-3 bg-gray-50 rounded-lg">
                 <div className="text-2xl font-bold text-gray-600">{formatTime(progress.elapsed_time)}</div>
                 <div className="text-sm text-muted-foreground">Elapsed Time</div>
               </div>
             </div>
 
             {progress.status === "completed" && progress.output_file && (
-              <Button onClick={downloadFile} className="w-full">
+              <Button onClick={downloadFile} className="w-full" size="lg">
                 <Download className="mr-2 h-4 w-4" />📥 Download {progress.display_name || "MBTiles File"}
               </Button>
             )}
@@ -448,18 +484,26 @@ export default function MBTilesDownloader() {
         </Card>
       )}
 
+      {/* Status Display */}
       {status && (
         <Alert
           className={
             statusType === "error"
-              ? "border-red-500"
+              ? "border-red-500 bg-red-50"
               : statusType === "success"
-                ? "border-green-500"
-                : "border-blue-500"
+                ? "border-green-500 bg-green-50"
+                : "border-blue-500 bg-blue-50"
           }
         >
+          {statusType === "error" ? (
+            <AlertCircle className="h-4 w-4" />
+          ) : statusType === "success" ? (
+            <CheckCircle className="h-4 w-4" />
+          ) : (
+            <Zap className="h-4 w-4" />
+          )}
           <AlertDescription>
-            <div dangerouslySetInnerHTML={{ __html: status }} />
+            <pre className="whitespace-pre-wrap font-sans">{status}</pre>
           </AlertDescription>
         </Alert>
       )}

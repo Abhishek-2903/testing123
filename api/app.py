@@ -1,23 +1,18 @@
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-import subprocess
 import os
 import json
 import time
-import tempfile
 import requests
-from urllib.parse import urlparse
 import sqlite3
 import math
 import re
 import threading
 from collections import defaultdict
+import tempfile
 
 app = Flask(__name__)
 CORS(app)
-
-# For Vercel deployment, we'll use a simpler approach without QGIS
-# QGIS_PATH = r"C:\Program Files\QGIS 3.42.3\bin\qgis_process-qgis.bat"
 
 # Global progress tracking with enhanced fields
 progress_data = defaultdict(lambda: {
@@ -42,14 +37,6 @@ def deg2num(lat_deg, lon_deg, zoom):
     xtile = int((lon_deg + 180.0) / 360.0 * n)
     ytile = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
     return (xtile, ytile)
-
-def num2deg(xtile, ytile, zoom):
-    """Convert tile numbers to lat/lon"""
-    n = 2.0 ** zoom
-    lon_deg = xtile / n * 360.0 - 180.0
-    lat_rad = math.atan(math.sinh(math.pi * (1 - 2 * ytile / n)))
-    lat_deg = math.degrees(lat_rad)
-    return (lat_deg, lon_deg)
 
 def calculate_total_tiles(min_lat, max_lat, min_lon, max_lon, min_zoom, max_zoom):
     """Calculate total number of tiles needed"""
@@ -147,9 +134,6 @@ def create_mbtiles_manually(lat, lon, min_zoom=10, max_zoom=16, buffer=0.005, cu
             min_x, max_y = deg2num(min_lat, min_lon, zoom)
             max_x, min_y = deg2num(max_lat, max_lon, zoom)
             
-            zoom_start_tiles = tile_count
-            zoom_successful = 0
-            
             # Download tiles
             for x in range(min_x, max_x + 1):
                 for y in range(min_y, max_y + 1):
@@ -175,24 +159,18 @@ def create_mbtiles_manually(lat, lon, min_zoom=10, max_zoom=16, buffer=0.005, cu
                                     (zoom, x, tms_y, tile_data)
                                 )
                                 successful_tiles += 1
-                                zoom_successful += 1
                             else:
-                                print(f"Invalid image data for tile {zoom}/{x}/{y}")
                                 failed_tiles += 1
                         else:
-                            print(f"Failed to download tile {zoom}/{x}/{y}: HTTP {response.status_code}")
                             failed_tiles += 1
                             
                         tile_count += 1
                         
-                        # Update progress more frequently (every 3 tiles instead of 5)
+                        # Update progress
                         if session_id:
                             progress_data[session_id]['downloaded_tiles'] = tile_count
                             progress_data[session_id]['last_update'] = time.time()
                         
-                        if tile_count % 3 == 0:
-                            print(f"Processed {tile_count} tiles ({successful_tiles} successful, {failed_tiles} failed)...")
-                            
                         # Small delay to be respectful to the tile server
                         time.sleep(0.05)  # 50ms delay
                                 
@@ -205,7 +183,6 @@ def create_mbtiles_manually(lat, lon, min_zoom=10, max_zoom=16, buffer=0.005, cu
                         continue
             
             conn.commit()
-            print(f"Completed zoom level {zoom}: {zoom_successful} successful tiles out of {tile_count - zoom_start_tiles} attempted")
             
         conn.close()
         
@@ -219,6 +196,9 @@ def create_mbtiles_manually(lat, lon, min_zoom=10, max_zoom=16, buffer=0.005, cu
         
         if session_id:
             progress_data[session_id]['status'] = 'completed'
+            progress_data[session_id]['output_file'] = output_file
+            progress_data[session_id]['file_size_bytes'] = os.path.getsize(output_file)
+            progress_data[session_id]['display_name'] = custom_filename + ".mbtiles" if custom_filename else os.path.basename(output_file)
             progress_data[session_id]['last_update'] = time.time()
         
         print(f"Successfully created MBTiles with {successful_tiles} tiles (attempted: {tile_count}, failed: {failed_tiles})")
@@ -237,6 +217,7 @@ def create_mbtiles_manually(lat, lon, min_zoom=10, max_zoom=16, buffer=0.005, cu
         return None, str(e)
 
 @app.route('/api/check_qgis', methods=['GET'])
+@app.route('/check_qgis', methods=['GET'])
 def check_qgis():
     """Endpoint to check system status for Vercel deployment"""
     return jsonify({
@@ -247,6 +228,7 @@ def check_qgis():
     })
 
 @app.route('/api/progress/<session_id>', methods=['GET'])
+@app.route('/progress/<session_id>', methods=['GET'])
 def get_progress(session_id):
     """Get download progress for a session"""
     if session_id not in progress_data:
@@ -284,6 +266,7 @@ def get_progress(session_id):
     return jsonify(data)
 
 @app.route('/api/download_mbtiles', methods=['POST'])
+@app.route('/download_mbtiles', methods=['POST'])
 def download_mbtiles():
     try:
         data = request.json
@@ -326,22 +309,8 @@ def download_mbtiles():
                 output_file, error = create_mbtiles_manually(lat, lon, min_zoom, max_zoom, buffer, custom_filename, session_id)
                 
                 if output_file and os.path.exists(output_file):
-                    file_size = os.path.getsize(output_file)
-                    display_name = custom_filename + ".mbtiles" if custom_filename else output_file
-                    progress_data[session_id].update({
-                        'status': 'completed',
-                        'output_file': output_file,
-                        'display_name': display_name,
-                        'file_size_bytes': file_size,
-                        'last_update': time.time()
-                    })
                     print(f"Session {session_id}: Download completed successfully")
                 else:
-                    progress_data[session_id].update({
-                        'status': 'error',
-                        'error': error or 'Unknown error occurred',
-                        'last_update': time.time()
-                    })
                     print(f"Session {session_id}: Download failed - {error}")
                     
             except Exception as e:
@@ -370,6 +339,7 @@ def download_mbtiles():
         return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
 @app.route('/api/download_file/<filename>', methods=['GET'])
+@app.route('/download_file/<filename>', methods=['GET'])
 def download_file(filename):
     """Download the generated MBTiles file"""
     try:
@@ -382,6 +352,7 @@ def download_file(filename):
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/health', methods=['GET'])
+@app.route('/health', methods=['GET'])
 def health_check():
     """Simple health check endpoint"""
     return jsonify({
