@@ -4,14 +4,13 @@ import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { MapPin, Download, LogOut, User, Settings, Activity } from "lucide-react"
+import { MapPin, LogOut, User, Settings, Activity } from "lucide-react"
 import { MBTilesDownloader } from "@/components/mbtiles-downloader"
 import { MapViewer } from "@/components/map-viewer"
 
 export default function Dashboard() {
   const [authenticated, setAuthenticated] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState("downloader")
   const router = useRouter()
 
   useEffect(() => {
@@ -45,7 +44,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
       {/* Header */}
       <div className="bg-white border-b">
         <div className="container mx-auto px-4 py-4">
@@ -84,59 +83,21 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Navigation Tabs */}
-      <div className="bg-white border-b">
-        <div className="container mx-auto px-4">
-          <div className="flex space-x-8">
-            <button
-              onClick={() => setActiveTab("downloader")}
-              className={`py-4 px-2 border-b-2 font-medium text-sm ${
-                activeTab === "downloader"
-                  ? "border-purple-500 text-purple-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-            >
-              <Download className="h-4 w-4 inline mr-2" />
-              MBTiles Downloader
-            </button>
-            <button
-              onClick={() => setActiveTab("viewer")}
-              className={`py-4 px-2 border-b-2 font-medium text-sm ${
-                activeTab === "viewer"
-                  ? "border-purple-500 text-purple-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-            >
-              <MapPin className="h-4 w-4 inline mr-2" />
-              Map Viewer
-            </button>
-          </div>
+      <div className="container mx-auto px-4 py-8">
+        <div className="mb-8 text-center">
+          <h1 className="text-4xl font-bold text-gray-900 mb-2">🛰️ Shoonya Innovation MBTiles Exporter</h1>
+          <p className="text-xl text-gray-600">Advanced satellite imagery download and processing platform</p>
         </div>
-      </div>
 
-      {/* Main Content */}
-      <div className="container mx-auto px-4 py-6">
-        {activeTab === "downloader" && (
-          <div>
-            <div className="mb-6">
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">MBTiles Downloader</h2>
-              <p className="text-gray-600">
-                Download map tiles for any region with customizable parameters and formats.
-              </p>
-            </div>
+        <div className="grid lg:grid-cols-2 gap-8">
+          <div className="space-y-6">
             <MBTilesDownloader />
           </div>
-        )}
 
-        {activeTab === "viewer" && (
-          <div>
-            <div className="mb-6">
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">Interactive Map Viewer</h2>
-              <p className="text-gray-600">Visualize and interact with your downloaded map tiles.</p>
-            </div>
+          <div className="space-y-6">
             <MapViewer />
           </div>
-        )}
+        </div>
       </div>
     </div>
   )
