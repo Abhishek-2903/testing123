@@ -1,3 +1,5 @@
+"use client"
+
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -5,8 +7,25 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
+import { Separator } from "@/components/ui/separator"
 import { Download, Settings, Zap, CheckCircle, AlertCircle, Clock, Activity, Satellite, Globe, Wifi, WifiOff } from "lucide-react"
+
+interface ProgressData {
+  total_tiles: number
+  downloaded_tiles: number
+  current_zoom: number
+  status: string
+  error?: string
+  progress_percent: number
+  tiles_per_second: number
+  estimated_remaining_time: number
+  elapsed_time: number
+  output_file?: string
+  display_name?: string
+  file_size_bytes?: number
+}
 
 export default function MBTilesExporter() {
   // Use environment variable or default to current domain
@@ -24,6 +43,9 @@ export default function MBTilesExporter() {
 
   // App state
   const [loading, setLoading] = useState(false)
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  const [progressData, setProgressData] = useState<ProgressData | null>(null)
+  
   type StatusType = { message: string; type: "info" | "success" | "error" } | null
   const [status, setStatus] = useState<StatusType>(null)
   const [connectionStatus, setConnectionStatus] = useState("checking")
@@ -32,12 +54,10 @@ export default function MBTilesExporter() {
 
   // Utility functions
   const sanitizeFilename = (filename: string) => {
-    if (!filename || filename.trim() === "") return ""
     return filename
-      .trim()
       .replace(/[^a-zA-Z0-9_-]/g, "_")
-      .replace(/_+/g, "_")
-      .replace(/^_|_$/g, "")
+      .replace(/_{2,}/g, "_")
+      .replace(/^_+|_+$/g, "")
       .substring(0, 50)
   }
 
@@ -48,6 +68,12 @@ export default function MBTilesExporter() {
     return `satellite_${latStr}_${lonStr}_z${minZoom}-${maxZoom}_${timestamp}`
   }
 
+  const formatTime = (seconds: number) => {
+    if (seconds < 60) return `${Math.round(seconds)}s`
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m ${Math.round(seconds % 60)}s`
+    return `${Math.round(seconds / 3600)}h ${Math.round((seconds % 3600) / 60)}m`
+  }
+
   // Area calculation
   const updateAreaInfo = () => {
     const buffer = areaSize === "custom" ? parseFloat(customBuffer) : parseFloat(areaSize)
@@ -55,8 +81,8 @@ export default function MBTilesExporter() {
     const zoomLevels = maxZoom - minZoom + 1
 
     let totalTiles = 0
-    for (let z = minZoom; z <= maxZoom; z++) {
-      const tilesPerSide = Math.ceil((buffer * Math.pow(2, z) * 111) / 0.15)
+    for (let zoom = minZoom; zoom <= maxZoom; zoom++) {
+      const tilesPerSide = Math.ceil((buffer * 2) * Math.pow(2, zoom))
       totalTiles += tilesPerSide * tilesPerSide
     }
 
@@ -140,17 +166,17 @@ export default function MBTilesExporter() {
 
     // Validation
     if (isNaN(latNum) || isNaN(lonNum) || isNaN(buffer)) {
-      setStatus({ message: "❌ Please enter valid coordinates and area size.", type: "error" })
+      setStatus({ message: "❌ Please enter valid numbers for coordinates and buffer", type: "error" })
       return
     }
 
-    if (latNum < -90 || latNum > 90 || lonNum < -180 || lonNum > 180) {
-      setStatus({ message: "❌ Coordinates must be within valid ranges.", type: "error" })
+    if (latNum < -90 || latNum > 90) {
+      setStatus({ message: "❌ Latitude must be between -90 and 90", type: "error" })
       return
     }
 
-    if (minZoom > maxZoom) {
-      setStatus({ message: "❌ Minimum zoom must be less than or equal to maximum zoom.", type: "error" })
+    if (lonNum < -180 || lonNum > 180) {
+      setStatus({ message: "❌ Longitude must be between -180 and 180", type: "error" })
       return
     }
 
@@ -198,7 +224,7 @@ export default function MBTilesExporter() {
 
   // Effects
   useEffect(() => {
-    checkConnection()
+    checkSystem()
     loadTileSources()
   }, [])
 
@@ -209,7 +235,7 @@ export default function MBTilesExporter() {
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 bg-gradient-to-r from-purple-600 to-blue-600 rounded-lg flex items-center justify-center">
+              <div className="p-2 bg-gradient-to-br from-blue-600 to-purple-600 rounded-lg">
                 <Satellite className="h-6 w-6 text-white" />
               </div>
               <div>
@@ -244,11 +270,11 @@ export default function MBTilesExporter() {
             {/* Coordinates */}
             <div className="grid md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="lat">📍 Latitude</Label>
+                <Label htmlFor="lat">🌍 Latitude</Label>
                 <Input
                   id="lat"
                   type="number"
-                  step="any"
+                  step="0.0001"
                   placeholder="e.g., 28.6139"
                   value={lat}
                   onChange={(e) => setLat(e.target.value)}
@@ -257,17 +283,32 @@ export default function MBTilesExporter() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="lon">📍 Longitude</Label>
+                <Label htmlFor="lon">🌍 Longitude</Label>
                 <Input
                   id="lon"
                   type="number"
-                  step="any"
+                  step="0.0001"
                   placeholder="e.g., 77.209"
                   value={lon}
                   onChange={(e) => setLon(e.target.value)}
                 />
                 <p className="text-xs text-gray-500">Range: -180 to 180</p>
               </div>
+            </div>
+
+            {/* Filename */}
+            <div className="space-y-2">
+              <Label htmlFor="filename">📁 File Name (optional)</Label>
+              <Input
+                id="filename"
+                placeholder="e.g., delhi_satellite_map"
+                value={filename}
+                onChange={(e) => setFilename(e.target.value)}
+                maxLength={50}
+              />
+              <p className="text-xs text-gray-500">
+                Leave empty for auto-generated name. Only letters, numbers, hyphens, and underscores allowed.
+              </p>
             </div>
 
             {/* Tile Source */}
@@ -286,27 +327,23 @@ export default function MBTilesExporter() {
             </div>
 
             {/* Area Size */}
-            <div className="grid md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="area-size">🗺️ Area Size</Label>
-                <Select value={areaSize} onValueChange={setAreaSize}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="0.001">Very Small (~200m × 200m)</SelectItem>
-                    <SelectItem value="0.005">Small (~1km × 1km)</SelectItem>
-                    <SelectItem value="0.01">Medium (~2km × 2km)</SelectItem>
-                    <SelectItem value="custom">Custom Buffer</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="space-y-2">
+              <Label htmlFor="area-size">📏 Area Size</Label>
+              <Select value={areaSize} onValueChange={setAreaSize}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0.001">Very Small (~200m × 200m)</SelectItem>
+                  <SelectItem value="0.005">Small (~1km × 1km)</SelectItem>
+                  <SelectItem value="0.01">Medium (~2km × 2km)</SelectItem>
+                  <SelectItem value="custom">Custom Buffer</SelectItem>
+                </SelectContent>
+              </Select>
 
               {areaSize === "custom" && (
-                <div className="space-y-2">
-                  <Label htmlFor="custom-buffer">📐 Custom Buffer (degrees)</Label>
+                <div className="mt-2">
                   <Input
-                    id="custom-buffer"
                     type="number"
                     step="0.001"
                     min="0.001"
@@ -314,7 +351,7 @@ export default function MBTilesExporter() {
                     value={customBuffer}
                     onChange={(e) => setCustomBuffer(e.target.value)}
                   />
-                  <p className="text-xs text-gray-500">0.001 ≈ 100m, 0.01 ≈ 1km</p>
+                  <p className="text-xs text-gray-500 mt-1">Enter custom buffer in decimal degrees</p>
                 </div>
               )}
             </div>
