@@ -1,351 +1,468 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
-import { Badge } from "@/components/ui/badge"
-import { Download, MapPin, Zap, CheckCircle, AlertCircle } from "lucide-react"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Download, MapPin, Settings, Zap, Database, Gauge } from "lucide-react"
 
-export function MBTilesDownloader() {
-  const [downloading, setDownloading] = useState(false)
-  const [progress, setProgress] = useState(0)
-  const [downloadComplete, setDownloadComplete] = useState(false)
-  const [error, setError] = useState("")
-  const [formData, setFormData] = useState({
-    north: "",
-    south: "",
-    east: "",
-    west: "",
-    minZoom: "1",
-    maxZoom: "15",
-    tileSource: "openstreetmap",
-    outputName: "tiles",
-  })
+interface ProgressData {
+  total_tiles: number
+  downloaded_tiles: number
+  current_zoom: number
+  status: string
+  error?: string
+  progress_percent: number
+  tiles_per_second: number
+  estimated_remaining_time: number
+  elapsed_time: number
+  output_file?: string
+  display_name?: string
+  file_size_bytes?: number
+}
 
-  const handleDownload = async () => {
-    setDownloading(true)
-    setProgress(0)
-    setError("")
-    setDownloadComplete(false)
+export default function MBTilesDownloader() {
+  const [lat, setLat] = useState<string>("")
+  const [lon, setLon] = useState<string>("")
+  const [filename, setFilename] = useState<string>("")
+  const [areaSize, setAreaSize] = useState<string>("0.005")
+  const [customBuffer, setCustomBuffer] = useState<string>("0.005")
+  const [minZoom, setMinZoom] = useState<number>(10)
+  const [maxZoom, setMaxZoom] = useState<number>(16)
+  const [isLoading, setIsLoading] = useState<boolean>(false)
+  const [status, setStatus] = useState<string>("")
+  const [statusType, setStatusType] = useState<"success" | "error" | "info">("info")
+  const [progress, setProgress] = useState<ProgressData | null>(null)
+  const [sessionId, setSessionId] = useState<string | null>(null)
+
+  const progressInterval = useRef<NodeJS.Timeout | null>(null)
+
+  // Get the base URL for API calls
+  const getApiUrl = (endpoint: string) => {
+    if (typeof window !== "undefined") {
+      // Client-side: use current domain
+      return `/api${endpoint}`
+    }
+    return `/api${endpoint}`
+  }
+
+  const updateAreaInfo = () => {
+    const buffer = areaSize === "custom" ? Number.parseFloat(customBuffer) : Number.parseFloat(areaSize)
+    const areaSizeKm = Math.round(buffer * 111)
+    const zoomLevels = maxZoom - minZoom + 1
+
+    let totalTiles = 0
+    for (let z = minZoom; z <= maxZoom; z++) {
+      const tilesPerSide = Math.ceil((buffer * Math.pow(2, z) * 111) / 0.15)
+      totalTiles += tilesPerSide * tilesPerSide
+    }
+
+    return {
+      areaSizeKm,
+      zoomLevels,
+      totalTiles,
+      estimatedSize: Math.round((totalTiles * 15) / 1024),
+    }
+  }
+
+  const formatTime = (seconds: number): string => {
+    if (seconds < 60) return `${Math.round(seconds)}s`
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m ${Math.round(seconds % 60)}s`
+    return `${Math.round(seconds / 3600)}h ${Math.round((seconds % 3600) / 60)}m`
+  }
+
+  const pollProgress = async (sessionId: string) => {
+    try {
+      const response = await fetch(getApiUrl(`/progress/${sessionId}`))
+      const progressData = await response.json()
+
+      if (response.ok) {
+        setProgress(progressData)
+
+        if (progressData.status === "completed") {
+          clearInterval(progressInterval.current!)
+          setIsLoading(false)
+
+          let message = `✅ MBTiles created successfully!<br/>`
+          message += `📁 File: ${progressData.display_name || "output.mbtiles"}<br/>`
+          message += `📏 Size: ${(progressData.file_size_bytes / 1024 / 1024).toFixed(2)} MB<br/>`
+          message += `📊 Total Tiles: ${progressData.total_tiles}<br/>`
+          message += `⏱️ Total Time: ${formatTime(progressData.elapsed_time)}`
+
+          setStatus(message)
+          setStatusType("success")
+        } else if (progressData.status === "error") {
+          clearInterval(progressInterval.current!)
+          setIsLoading(false)
+          setStatus(`❌ Download failed: ${progressData.error}`)
+          setStatusType("error")
+        }
+      }
+    } catch (error) {
+      console.error("Progress polling failed:", error)
+    }
+  }
+
+  const checkSetup = async () => {
+    setIsLoading(true)
+    setStatus("Checking system setup...")
+    setStatusType("info")
 
     try {
-      // Validate coordinates
-      const { north, south, east, west, minZoom, maxZoom, outputName } = formData
+      const response = await fetch(getApiUrl("/check_qgis"))
+      const data = await response.json()
 
-      if (!north || !south || !east || !west) {
-        throw new Error("Please provide all coordinate values")
+      if (response.ok) {
+        let message = `✅ System Status: ${data.qgis_status}<br/><br/>`
+        message += `🛠️ Available Methods:<br/>`
+        message += `• Manual tile download (recommended)<br/>`
+        message += `<br/>📡 Ready to download satellite imagery!`
+
+        setStatus(message)
+        setStatusType("success")
+      } else {
+        setStatus(`❌ Error: ${data.error}`)
+        setStatusType("error")
       }
+    } catch (error) {
+      setStatus(`❌ Network Error: ${error}`)
+      setStatusType("error")
+    }
 
-      // Simulate download progress
-      const progressInterval = setInterval(() => {
-        setProgress((prev) => {
-          if (prev >= 95) {
-            clearInterval(progressInterval)
-            return 95
-          }
-          return prev + Math.random() * 10
-        })
-      }, 500)
+    setIsLoading(false)
+  }
 
-      // Simulate API call to Python backend
-      const response = await fetch("/api/download-mbtiles", {
+  const downloadMBTiles = async () => {
+    const latNum = Number.parseFloat(lat)
+    const lonNum = Number.parseFloat(lon)
+    const buffer = areaSize === "custom" ? Number.parseFloat(customBuffer) : Number.parseFloat(areaSize)
+
+    // Validation
+    if (isNaN(latNum) || isNaN(lonNum) || isNaN(buffer)) {
+      setStatus("❌ Please enter valid coordinates and area size.")
+      setStatusType("error")
+      return
+    }
+
+    if (latNum < -90 || latNum > 90 || lonNum < -180 || lonNum > 180) {
+      setStatus("❌ Coordinates must be within valid ranges.")
+      setStatusType("error")
+      return
+    }
+
+    if (minZoom > maxZoom) {
+      setStatus("❌ Minimum zoom must be less than or equal to maximum zoom.")
+      setStatusType("error")
+      return
+    }
+
+    setIsLoading(true)
+    setStatus("🚀 Starting satellite tile download...")
+    setStatusType("info")
+    setProgress(null)
+
+    try {
+      const response = await fetch(getApiUrl("/download_mbtiles"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          bounds: {
-            north: Number.parseFloat(north),
-            south: Number.parseFloat(south),
-            east: Number.parseFloat(east),
-            west: Number.parseFloat(west),
-          },
-          minZoom: Number.parseInt(minZoom),
-          maxZoom: Number.parseInt(maxZoom),
-          tileSource: formData.tileSource,
-          outputName,
+          lat: latNum,
+          lon: lonNum,
+          buffer,
+          min_zoom: minZoom,
+          max_zoom: maxZoom,
+          filename: filename.trim(),
         }),
       })
 
-      if (response.ok) {
-        setProgress(100)
-        setDownloadComplete(true)
+      const data = await response.json()
 
-        // Create and trigger download of sample file
-        const blob = new Blob(["Sample MBTiles data"], { type: "application/octet-stream" })
-        const url = window.URL.createObjectURL(blob)
-        const a = document.createElement("a")
-        a.href = url
-        a.download = `${outputName}.mbtiles`
-        document.body.appendChild(a)
-        a.click()
-        window.URL.revokeObjectURL(url)
-        document.body.removeChild(a)
+      if (response.ok && data.session_id) {
+        setSessionId(data.session_id)
+        setStatus("📡 Download started! Tracking progress...")
+        setStatusType("info")
+
+        // Start polling for progress
+        progressInterval.current = setInterval(() => {
+          pollProgress(data.session_id)
+        }, 1500)
+
+        // Initial progress check
+        setTimeout(() => pollProgress(data.session_id), 500)
       } else {
-        throw new Error("Download failed")
+        setIsLoading(false)
+        setStatus(`❌ Failed to start download: ${data.error || "Unknown error"}`)
+        setStatusType("error")
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Download failed")
-    } finally {
-      setDownloading(false)
+    } catch (error) {
+      setIsLoading(false)
+      setStatus(`❌ Network Error: ${error}`)
+      setStatusType("error")
     }
   }
 
-  const handleInputChange = (field: string, value: string) => {
-    setFormData((prev) => ({ ...prev, [field]: value }))
+  const downloadFile = () => {
+    if (progress?.output_file) {
+      const filename = progress.output_file.split("/").pop() || "output.mbtiles"
+      const link = document.createElement("a")
+      link.href = getApiUrl(`/download_file/${filename}`)
+      link.download = progress.display_name || filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    }
   }
+
+  useEffect(() => {
+    return () => {
+      if (progressInterval.current) {
+        clearInterval(progressInterval.current)
+      }
+    }
+  }, [])
+
+  const estimates = updateAreaInfo()
 
   return (
     <div className="space-y-6">
-      {/* Quick Actions */}
-      <div className="grid md:grid-cols-3 gap-4">
-        <Card
-          className="cursor-pointer hover:shadow-md transition-shadow"
-          onClick={() => {
-            setFormData({
-              ...formData,
-              north: "40.7831",
-              south: "40.7489",
-              east: "-73.9441",
-              west: "-74.0059",
-            })
-          }}
-        >
-          <CardContent className="p-4 text-center">
-            <MapPin className="h-6 w-6 text-blue-600 mx-auto mb-2" />
-            <p className="font-medium">New York City</p>
-            <p className="text-sm text-gray-500">Quick preset</p>
-          </CardContent>
-        </Card>
-
-        <Card
-          className="cursor-pointer hover:shadow-md transition-shadow"
-          onClick={() => {
-            setFormData({
-              ...formData,
-              north: "51.5074",
-              south: "51.4994",
-              east: "-0.1278",
-              west: "-0.1369",
-            })
-          }}
-        >
-          <CardContent className="p-4 text-center">
-            <MapPin className="h-6 w-6 text-green-600 mx-auto mb-2" />
-            <p className="font-medium">London</p>
-            <p className="text-sm text-gray-500">Quick preset</p>
-          </CardContent>
-        </Card>
-
-        <Card
-          className="cursor-pointer hover:shadow-md transition-shadow"
-          onClick={() => {
-            setFormData({
-              ...formData,
-              north: "37.7849",
-              south: "37.7749",
-              east: "-122.4194",
-              west: "-122.4294",
-            })
-          }}
-        >
-          <CardContent className="p-4 text-center">
-            <MapPin className="h-6 w-6 text-purple-600 mx-auto mb-2" />
-            <p className="font-medium">San Francisco</p>
-            <p className="text-sm text-gray-500">Quick preset</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Main Form */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Download className="h-5 w-5" />
-            Download Configuration
+            <MapPin className="h-5 w-5" />
+            Location Settings
           </CardTitle>
-          <CardDescription>Configure your MBTiles download parameters and region of interest.</CardDescription>
+          <CardDescription>Enter the coordinates and area size for your satellite imagery download</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-6">
-          {/* Coordinates */}
-          <div>
-            <Label className="text-base font-medium mb-3 block">Bounding Box Coordinates</Label>
-            <div className="grid md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="north">North Latitude</Label>
-                <Input
-                  id="north"
-                  type="number"
-                  step="any"
-                  placeholder="40.7831"
-                  value={formData.north}
-                  onChange={(e) => handleInputChange("north", e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="south">South Latitude</Label>
-                <Input
-                  id="south"
-                  type="number"
-                  step="any"
-                  placeholder="40.7489"
-                  value={formData.south}
-                  onChange={(e) => handleInputChange("south", e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="east">East Longitude</Label>
-                <Input
-                  id="east"
-                  type="number"
-                  step="any"
-                  placeholder="-73.9441"
-                  value={formData.east}
-                  onChange={(e) => handleInputChange("east", e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="west">West Longitude</Label>
-                <Input
-                  id="west"
-                  type="number"
-                  step="any"
-                  placeholder="-74.0059"
-                  value={formData.west}
-                  onChange={(e) => handleInputChange("west", e.target.value)}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Zoom Levels */}
-          <div>
-            <Label className="text-base font-medium mb-3 block">Zoom Levels</Label>
-            <div className="grid md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="minZoom">Minimum Zoom</Label>
-                <Select value={formData.minZoom} onValueChange={(value) => handleInputChange("minZoom", value)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {[...Array(19)].map((_, i) => (
-                      <SelectItem key={i} value={i.toString()}>
-                        {i}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="maxZoom">Maximum Zoom</Label>
-                <Select value={formData.maxZoom} onValueChange={(value) => handleInputChange("maxZoom", value)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {[...Array(19)].map((_, i) => (
-                      <SelectItem key={i} value={i.toString()}>
-                        {i}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </div>
-
-          {/* Tile Source */}
-          <div className="space-y-2">
-            <Label htmlFor="tileSource">Tile Source</Label>
-            <Select value={formData.tileSource} onValueChange={(value) => handleInputChange("tileSource", value)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="openstreetmap">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary">Free</Badge>
-                    OpenStreetMap
-                  </div>
-                </SelectItem>
-                <SelectItem value="satellite">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary">Premium</Badge>
-                    Satellite Imagery
-                  </div>
-                </SelectItem>
-                <SelectItem value="terrain">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary">Free</Badge>
-                    Terrain
-                  </div>
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Output Name */}
-          <div className="space-y-2">
-            <Label htmlFor="outputName">Output Filename</Label>
-            <Input
-              id="outputName"
-              placeholder="my-tiles"
-              value={formData.outputName}
-              onChange={(e) => handleInputChange("outputName", e.target.value)}
-            />
-          </div>
-
-          {/* Progress */}
-          {downloading && (
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span>Downloading tiles...</span>
-                <span>{Math.round(progress)}%</span>
-              </div>
-              <Progress value={progress} className="w-full" />
+              <Label htmlFor="lat">📍 Latitude</Label>
+              <Input
+                id="lat"
+                type="number"
+                step="any"
+                placeholder="e.g., 28.6139"
+                value={lat}
+                onChange={(e) => setLat(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">Range: -90 to 90</p>
             </div>
-          )}
 
-          {/* Error */}
-          {error && (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
+            <div className="space-y-2">
+              <Label htmlFor="lon">📍 Longitude</Label>
+              <Input
+                id="lon"
+                type="number"
+                step="any"
+                placeholder="e.g., 77.209"
+                value={lon}
+                onChange={(e) => setLon(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">Range: -180 to 180</p>
+            </div>
+          </div>
 
-          {/* Success */}
-          {downloadComplete && (
-            <Alert className="border-green-200 bg-green-50">
-              <CheckCircle className="h-4 w-4 text-green-600" />
-              <AlertDescription className="text-green-700">
-                Download completed successfully! File has been saved to your downloads folder.
-              </AlertDescription>
-            </Alert>
-          )}
+          <div className="space-y-2">
+            <Label htmlFor="filename">📁 File Name (optional)</Label>
+            <Input
+              id="filename"
+              type="text"
+              placeholder="e.g., delhi_satellite_map"
+              maxLength={50}
+              value={filename}
+              onChange={(e) => setFilename(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Leave empty for auto-generated name. Only letters, numbers, hyphens, and underscores allowed.
+            </p>
+          </div>
 
-          {/* Download Button */}
-          <Button onClick={handleDownload} disabled={downloading} className="w-full" size="lg">
-            {downloading ? (
-              <>
-                <Zap className="h-4 w-4 mr-2 animate-spin" />
-                Downloading...
-              </>
-            ) : (
-              <>
-                <Download className="h-4 w-4 mr-2" />
-                Download MBTiles
-              </>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>🗺️ Area Size</Label>
+              <Select value={areaSize} onValueChange={setAreaSize}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0.001">Very Small (~200m × 200m)</SelectItem>
+                  <SelectItem value="0.005">Small (~1km × 1km)</SelectItem>
+                  <SelectItem value="0.01">Medium (~2km × 2km)</SelectItem>
+                  <SelectItem value="0.02">Large (~4km × 4km)</SelectItem>
+                  <SelectItem value="0.05">Very Large (~10km × 10km)</SelectItem>
+                  <SelectItem value="custom">Custom Buffer</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {areaSize === "custom" && (
+              <div className="space-y-2">
+                <Label htmlFor="custom-buffer">📐 Custom Buffer (degrees)</Label>
+                <Input
+                  id="custom-buffer"
+                  type="number"
+                  step="0.001"
+                  min="0.001"
+                  max="0.1"
+                  value={customBuffer}
+                  onChange={(e) => setCustomBuffer(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">0.001 ≈ 100m, 0.01 ≈ 1km</p>
+              </div>
             )}
-          </Button>
+          </div>
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Settings className="h-5 w-5" />
+            Zoom Level Configuration
+          </CardTitle>
+          <CardDescription>Configure the detail level of your satellite imagery</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>🔍 Minimum Zoom Level: {minZoom}</Label>
+              <input
+                type="range"
+                min="1"
+                max="18"
+                value={minZoom}
+                onChange={(e) => setMinZoom(Number.parseInt(e.target.value))}
+                className="w-full"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>🔍 Maximum Zoom Level: {maxZoom}</Label>
+              <input
+                type="range"
+                min="1"
+                max="21"
+                value={maxZoom}
+                onChange={(e) => setMaxZoom(Number.parseInt(e.target.value))}
+                className="w-full"
+              />
+            </div>
+          </div>
+
+          <Alert>
+            <Database className="h-4 w-4" />
+            <AlertDescription>
+              <strong>📊 Download Estimate</strong>
+              <br />
+              <strong>Area:</strong> ~{estimates.areaSizeKm}km × {estimates.areaSizeKm}km
+              <br />
+              <strong>Zoom Range:</strong> {minZoom}-{maxZoom} ({estimates.zoomLevels} levels)
+              <br />
+              <strong>Estimated Tiles:</strong> ~{estimates.totalTiles.toLocaleString()} tiles
+              <br />
+              <strong>Estimated Size:</strong> ~{estimates.estimatedSize} MB
+            </AlertDescription>
+          </Alert>
+
+          <Alert>
+            <AlertDescription>
+              <strong>💡 Zoom Level Guide</strong>
+              <br />
+              <strong>1-8:</strong> Country/Region level
+              <br />
+              <strong>9-12:</strong> City level
+              <br />
+              <strong>13-16:</strong> Street/Building level (recommended)
+              <br />
+              <strong>17-21:</strong> Very detailed (large file sizes)
+            </AlertDescription>
+          </Alert>
+        </CardContent>
+      </Card>
+
+      <div className="flex gap-4">
+        <Button onClick={checkSetup} disabled={isLoading} variant="outline" className="flex-1 bg-transparent">
+          <Zap className="mr-2 h-4 w-4" />🔧 Check Setup
+        </Button>
+        <Button onClick={downloadMBTiles} disabled={isLoading} className="flex-1">
+          <Download className="mr-2 h-4 w-4" />🚀 Download MBTiles
+        </Button>
+      </div>
+
+      {progress && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Gauge className="h-5 w-5" />
+              Download Progress
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Progress value={progress.progress_percent} className="w-full" />
+
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+              <div className="text-center">
+                <div className="text-2xl font-bold text-green-600">{progress.progress_percent}%</div>
+                <div className="text-sm text-muted-foreground">Progress</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-blue-600">
+                  {progress.downloaded_tiles} / {progress.total_tiles}
+                </div>
+                <div className="text-sm text-muted-foreground">Tiles Downloaded</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-purple-600">{progress.current_zoom}</div>
+                <div className="text-sm text-muted-foreground">Current Zoom</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-orange-600">{progress.tiles_per_second}</div>
+                <div className="text-sm text-muted-foreground">Tiles/sec</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-red-600">
+                  {progress.estimated_remaining_time > 0
+                    ? formatTime(progress.estimated_remaining_time)
+                    : "Calculating..."}
+                </div>
+                <div className="text-sm text-muted-foreground">Time Remaining</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-gray-600">{formatTime(progress.elapsed_time)}</div>
+                <div className="text-sm text-muted-foreground">Elapsed Time</div>
+              </div>
+            </div>
+
+            {progress.status === "completed" && progress.output_file && (
+              <Button onClick={downloadFile} className="w-full">
+                <Download className="mr-2 h-4 w-4" />📥 Download {progress.display_name || "MBTiles File"}
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {status && (
+        <Alert
+          className={
+            statusType === "error"
+              ? "border-red-500"
+              : statusType === "success"
+                ? "border-green-500"
+                : "border-blue-500"
+          }
+        >
+          <AlertDescription>
+            <div dangerouslySetInnerHTML={{ __html: status }} />
+          </AlertDescription>
+        </Alert>
+      )}
     </div>
   )
 }
